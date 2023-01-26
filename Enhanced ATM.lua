@@ -15,14 +15,16 @@ math.randomseed(math.floor(os.clock()) + os.time())
 EnhancedATM = "Enhanced ATM V1"
 
 local menu = menu
-local system = system
-local utils = utils
 local IniParser = IniParser
-local input = input
-local native = native
+local yield = system.yield
+local get_appdata_path = utils.get_appdata_path
+local input_get = input.get
+local invoke = native.call
+local intBuffer = native.ByteBuffer8
+local player_id = player.player_id
 
 local string_format = string.format
-local math_random = math.random
+local math = math
 
 local function notif(str, iserr)
 	local col = 0xFF8C8C8C
@@ -41,42 +43,60 @@ end
 
 local natives = {
 	is_control_on = function()
-		return native.call(0x49C32D60007AFA47, player.player_id()):__tointeger()~= 0		
+		return invoke(0x49C32D60007AFA47, player_id()):__tointeger()~= 0		
 	end,
 	busyspinner_is_on = function()
-		return native.call(0xD422FCC5F239A915):__tointeger()~= 0
+		return invoke(0xD422FCC5F239A915):__tointeger()~= 0
 	end,
 	busyspinner_is_displaying = function()
-		return native.call(0xB2A592B04648A9CB):__tointeger()~= 0
+		return invoke(0xB2A592B04648A9CB):__tointeger()~= 0
 	end,
 	stat_get_int = function(stat)
-		local hash = native.call(0xD24D37CC275948CC, stat):__tointeger()
-		local out = native.ByteBuffer8()
-		native.call(0x767FBC2AC802EF3D, hash, out, -1)
+		local hash = invoke(0xD24D37CC275948CC, stat):__tointeger()
+		local out = intBuffer()
+		invoke(0x767FBC2AC802EF3D, hash, out, -1)
 		return out:__tointeger()
 	end,
 	
 	deposit = function(slot, amount)
-		return native.call(0xC2F7FE5309181C7D, slot, amount):__tointeger()~= 0
+		return invoke(0xC2F7FE5309181C7D, slot, amount):__tointeger()~= 0
 	end,
 	deposit_status = function()
-		return native.call(0x350AA5EBC03D3BD2):__tointeger()~= 0
+		return invoke(0x350AA5EBC03D3BD2):__tointeger()~= 0
 	end,
 	
 	withdraw = function(slot, amount)
-		return native.call(0xD47A2C1BA117471D, slot, amount):__tointeger()~= 0
+		return invoke(0xD47A2C1BA117471D, slot, amount):__tointeger()~= 0
 	end,
 	withdraw_status = function()
-		return native.call(0x23789E777D14CE44):__tointeger()~= 0
+		return invoke(0x23789E777D14CE44):__tointeger()~= 0
 	end,
 	
 	nonce = function()
-		return native.call(0x498C1E05CE5F7877):__tointeger()~= 0
+		return invoke(0x498C1E05CE5F7877):__tointeger()~= 0
+	end,
+	
+	is_transaction_in_progress = function()
+		return invoke(0x613F125BA3BD2EB9):__tointeger()~= 0
+	end,
+	
+	is_session_state_ready = function()
+		local out = intBuffer()
+		local unk = intBuffer()
+		invoke(0x897433D292B44130, out, unk)
+			out = out:__tointeger()
+		return ( out == 8 and true or false)
 	end
 }
 
-local function isBusySpinnerOn()
-	return (natives.busyspinner_is_on() or natives.busyspinner_is_displaying())
+local function isReady()
+	if not natives.is_control_on()
+		or (natives.is_transaction_in_progress() or not natives.is_session_state_ready())
+		or (natives.busyspinner_is_on() or natives.busyspinner_is_displaying())
+	then
+		return false
+	end
+	return true
 end
 	
 local function ATM(val, isWithdraw)
@@ -85,20 +105,17 @@ local function ATM(val, isWithdraw)
 		notif("Session is not started.", true)
 		return
 	end
-	while not natives.is_control_on() do
-		system.yield(1500)
+	while not isReady() do
+		notif("Waiting for ready state...")
+		yield(1500)
 	end
-	while isBusySpinnerOn() do
-		notif("Waiting for Busy Spinner...")
-		system.yield(1500)
-	end
-	
+
 	local mp = natives.stat_get_int("MPPLY_LAST_MP_CHAR")
 	
 	if isWithdraw == 1 then
 		local set = natives.withdraw(mp, val)
 		natives.nonce()
-		system.yield(100)
+		yield(100)
 		local status = natives.withdraw_status()
 		if set and status then
 			notif(string_format("Withdrawal $%s #FF72CC72#Success#DEFAULT#.", tostring(val)))
@@ -108,7 +125,7 @@ local function ATM(val, isWithdraw)
 	else
 		local set = natives.deposit(mp, val)
 		natives.nonce()
-		system.yield(100)
+		yield(100)
 		local status = natives.deposit_status()
 		if set and status then
 			notif(string_format("Deposit $%s #FF72CC72#Success#DEFAULT#.", tostring(val)))
@@ -121,7 +138,7 @@ end
 
 local feats, feat_vals, tmp = {}, {}, {}
 tmp.last = 0
-local ini = IniParser(utils.get_appdata_path("PopstarDevs", "2Take1Menu") .. "\\scripts\\Enhanced ATM.ini")
+local ini = IniParser(get_appdata_path("PopstarDevs", "2Take1Menu") .. "\\scripts\\Enhanced ATM.ini")
 
 local function Save()
     for k, v in pairs(feats) do
@@ -164,15 +181,15 @@ feats.randomizervalue = menu.add_feature("Randomizer Value", "toggle", main.id, 
 		feat_vals.value_max.hidden = true
 	end
 	Save()
-	system.yield(0)
+	yield(0)
 end)
 
 feat_vals.value = menu.add_feature("Value", "action_value_i", main.id, function(f)
 	local r, i
 	repeat
-		r, i = input.get(f.name, "", 10, 3)
+		r, i = input_get(f.name, "", 10, 3)
 		if r == 2 then return end
-		system.yield(0)
+		yield(0)
 	until r == 0
 
 	f.value = i
@@ -183,9 +200,9 @@ feat_vals.value.min = 1 feat_vals.value.max = 2147483647 feat_vals.value.mod = 1
 feat_vals.value_min = menu.add_feature("Value Min", "action_value_i", main.id, function(f)
 	local r, i
 	repeat
-		r, i = input.get(f.name, "", 10, 3)
+		r, i = input_get(f.name, "", 10, 3)
 		if r == 2 then return end
-		system.yield(0)
+		yield(0)
 	until r == 0
 	
 	if tonumber(i) >= feat_vals.value_max.value then
@@ -202,9 +219,9 @@ feat_vals.value_min.min = 1 feat_vals.value_min.max = 2147483647 feat_vals.value
 feat_vals.value_max = menu.add_feature("Value Max", "action_value_i", main.id, function(f)
 	local r, i
 	repeat
-		r, i = input.get(f.name, "", 10, 3)
+		r, i = input_get(f.name, "", 10, 3)
 		if r == 2 then return end
-		system.yield(0)
+		yield(0)
 	until r == 0
 	
 	if tonumber(i) <= feat_vals.value_min.value then
@@ -223,11 +240,11 @@ menu.add_feature("Deposit", "action", main.id, function(f)
 	local val = feat_vals.value.value
 		if feats.randomizervalue.on then
 			math.randomseed(math.floor(os.clock()) + os.time())
-			val = math_random(feat_vals.value_min.value, feat_vals.value_max.value)
+			val = math.random(feat_vals.value_min.value, feat_vals.value_max.value)
 		end
 		
 	ATM(val, tmp.last)
-	system.yield(0)
+	yield(0)
 end)
 
 menu.add_feature("Withdraw", "action", main.id, function(f)
@@ -235,11 +252,11 @@ menu.add_feature("Withdraw", "action", main.id, function(f)
 	local val = feat_vals.value.value
 		if feats.randomizervalue.on then
 			math.randomseed(math.floor(os.clock()) + os.time())
-			val = math_random(feat_vals.value_min.value, feat_vals.value_max.value)
+			val = math.random(feat_vals.value_min.value, feat_vals.value_max.value)
 		end
 		
 	ATM(val, tmp.last)
-	system.yield(0)
+	yield(0)
 end)
 
 menu.add_feature("Toggle Last Option", "toggle", main.id, function(f)
@@ -250,16 +267,16 @@ menu.add_feature("Toggle Last Option", "toggle", main.id, function(f)
 	local val = feat_vals.value.value
 		if feats.randomizervalue.on then
 			math.randomseed(math.floor(os.clock()) + os.time())
-			val = math_random(feat_vals.value_min.value, feat_vals.value_max.value)
+			val = math.random(feat_vals.value_min.value, feat_vals.value_max.value)
 		end
 	ATM(val, tmp.last)
 	
 	if f.on then
-		system.yield(feat_vals.delay.value)
+		yield(feat_vals.delay.value)
 		return HANDLER_CONTINUE
 	else
 		feat_vals.delay.hidden = true
-		system.yield(0)
+		yield(0)
 		return HANDLER_POP
 	end
 end)
@@ -267,9 +284,9 @@ end)
 feat_vals.delay = menu.add_feature("Delay (ms)", "action_value_i", main.id, function(f)
 	local r, i
 	repeat
-		r, i = input.get(f.name, "", 10, 3)
+		r, i = input_get(f.name, "", 10, 3)
 		if r == 2 then return end
-		system.yield(0)
+		yield(0)
 	until r == 0
 
 	f.value = i
